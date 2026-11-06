@@ -3,9 +3,16 @@
 const $=(s,r=document)=>r.querySelector(s);
 const MONTHS=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
 const MS=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-const EXP=['Alimentação','Transporte','Moradia','Contas','Saúde','Lazer','Educação','Outros'];
-const INC=['Salário','Freelance','Investimentos','Outros'];
-const ALLC=[...new Set([...EXP,...INC])];
+const EXPB=['Alimentação','Transporte','Moradia','Contas','Saúde','Lazer','Educação'];
+const INCB=['Salário','Freelance','Investimentos'];
+const EXP=[],INC=[],ALLC=[];
+/* categorias padrão + personalizadas (S.cats); "Outros" fica sempre por último */
+function syncCats(){
+  const cs=(typeof S==='object'&&S&&Array.isArray(S.cats))?S.cats:[];
+  EXP.length=0;EXP.push(...EXPB,...cs.filter(c=>c.type==='expense').map(c=>c.name),'Outros');
+  INC.length=0;INC.push(...INCB,...cs.filter(c=>c.type==='income').map(c=>c.name),'Outros');
+  ALLC.length=0;ALLC.push(...new Set([...EXP,...INC]));
+}
 const CI={'Alimentação':'food','Transporte':'car','Moradia':'home','Contas':'bolt','Saúde':'heart','Lazer':'ticket','Educação':'book','Salário':'cash','Freelance':'briefcase','Investimentos':'trend','Outros':'tag'};
 const KW={'Alimentação':['alimenta','comida','mercado','restaurante','almoco','jantar','feira'],'Transporte':['transporte','uber','combustivel','gasolina','onibus','corrida'],'Moradia':['moradia','aluguel','condominio'],'Contas':['contas','luz','agua','internet','telefone'],'Saúde':['saude','farmacia','consulta','remedio'],'Lazer':['lazer','cinema','streaming','diversao'],'Educação':['educacao','curso','escola','faculdade']};
 
@@ -44,8 +51,8 @@ const numIn=v=>r2(v).toFixed(2).replace('.',',');
 
 /* ---------- dados ---------- */
 const cmp=(a,b)=>b.date.localeCompare(a.date)||b.ts-a.ts;
-function emptyState(){return{v:2,name:'',hide:false,limit:null,opening:0,onboarded:false,month:mkey(new Date()),simFail:false,chat:[],tx:[],goals:[],rec:[]}}
-let S=emptyState();
+function emptyState(){return{v:2,name:'',hide:false,limit:null,opening:0,onboarded:false,month:mkey(new Date()),simFail:false,chat:[],tx:[],goals:[],rec:[],cats:[]}}
+let S=emptyState();syncCats();
 
 /* ---------- conta (Supabase) e sincronização ---------- */
 const CFG=window.FLUXO_CONFIG||{};
@@ -277,7 +284,7 @@ async function askAssistant(q){
 }
 const tm=v=>'⟦'+r2(v)+'⟧';
 const fmt=t=>esc(t).replace(/⟦(-?[\d.]+)⟧/g,(_,n)=>money(parseFloat(n)));
-function catFrom(n){for(const[c,ks]of Object.entries(KW))if(ks.some(k=>n.includes(k)))return c;return null}
+function catFrom(n){const cc=(S.cats||[]).find(c=>c.type==='expense'&&n.includes(norm(c.name)));if(cc)return cc.name;for(const[c,ks]of Object.entries(KW))if(ks.some(k=>n.includes(k)))return c;return null}
 function cleanDesc(s){return s.replace(/\b(r\$|reais|real)\b/gi,' ').replace(/^\s*(?:(?:gastei|paguei|comprei|recebi|ganhei|registre|registrar|lance|lancar|lançar|adicione|adicionar|uma?|o|a|um|de|do|da|no|na|em|com|para|pra)\s+)+/i,'').replace(/\s+(?:de|do|da|no|na|em|com|para|pra)\s*$/i,'').replace(/\s+/g,' ').trim()}
 function parseEntry(q){
   const m=q.match(/(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/);if(!m)return null;
@@ -652,15 +659,21 @@ function cleanData(d){
   if(!d||typeof d!=='object'||!Array.isArray(d.tx))return null;
   const num=v=>typeof v==='number'&&isFinite(v),str=(v,n)=>String(v==null?'':v).slice(0,n),seen=new Set(),mk=v=>/^\d{4}-(0[1-9]|1[0-2])$/.test(String(v));
   const id=v=>{let s=str(v||uid(),40);if(seen.has(s))s=uid();seen.add(s);return s};
-  const tx=[],goals=[],rec=[],recIds=new Set();
+  const tx=[],goals=[],rec=[],recIds=new Set(),cats=[],used=new Set([...EXPB,...INCB,'Outros'].map(norm));
+  (Array.isArray(d.cats)?d.cats:[]).slice(0,100).forEach(c=>{
+    if(!c||!['income','expense'].includes(c.type))return;
+    const nm=str(c.name,24).trim();if(nm.length<2||used.has(norm(nm)))return;
+    used.add(norm(nm));cats.push({id:id(c.id),type:c.type,name:nm});
+  });
+  const exl=[...EXPB,...cats.filter(c=>c.type==='expense').map(c=>c.name),'Outros'],inl=[...INCB,...cats.filter(c=>c.type==='income').map(c=>c.name),'Outros'];
   (Array.isArray(d.rec)?d.rec:[]).slice(0,200).forEach(x=>{
     if(!x||!['income','expense'].includes(x.type)||!num(x.amt)||!(x.amt>0)||x.amt>9999999.99||!Number.isInteger(x.day)||x.day<1||x.day>31||!mk(x.from))return;
-    const cat=(x.type==='income'?INC:EXP).includes(x.cat)?x.cat:'Outros',rid=id(x.id);recIds.add(rid);
+    const cat=(x.type==='income'?inl:exl).includes(x.cat)?x.cat:'Outros',rid=id(x.id);recIds.add(rid);
     rec.push({id:rid,type:x.type,desc:str(x.desc,60)||cat,amt:r2(x.amt),cat,day:x.day,from:x.from,skip:(Array.isArray(x.skip)?x.skip:[]).filter(mk).slice(0,240)});
   });
   d.tx.slice(0,50000).forEach(x=>{
     if(!x||typeof x!=='object'||!['income','expense'].includes(x.type)||!num(x.amt)||!(x.amt>0)||x.amt>9999999.99||!validDate(String(x.date)))return;
-    const cat=(x.type==='income'?INC:EXP).includes(x.cat)?x.cat:'Outros';
+    const cat=(x.type==='income'?inl:exl).includes(x.cat)?x.cat:'Outros';
     const o={id:id(x.id),ts:num(x.ts)?x.ts:Date.now(),type:x.type,desc:str(x.desc,60)||cat,amt:r2(x.amt),cat,date:x.date};
     if(x.pending===true)o.pending=true;
     if(typeof x.recId==='string'&&recIds.has(x.recId))o.recId=x.recId;
@@ -671,7 +684,7 @@ function cleanData(d){
     const sv=num(g.saved)?Math.min(Math.max(g.saved,0),g.target):0;
     goals.push({id:id(g.id),name:str(g.name,40)||'Meta',target:r2(g.target),saved:r2(sv),deadline:g.deadline});
   });
-  return{v:2,name:str(d.name,30),hide:d.hide===true,limit:num(d.limit)&&d.limit>0&&d.limit<=9999999.99?r2(d.limit):null,opening:num(d.opening)&&Math.abs(d.opening)<=9999999.99?r2(d.opening):0,onboarded:true,tx,goals,rec};
+  return{v:2,name:str(d.name,30),hide:d.hide===true,limit:num(d.limit)&&d.limit>0&&d.limit<=9999999.99?r2(d.limit):null,opening:num(d.opening)&&Math.abs(d.opening)<=9999999.99?r2(d.opening):0,onboarded:true,tx,goals,rec,cats};
 }
 async function restoreFile(f){
   if(f.size>3e6){toast('Arquivo grande demais para ser um backup do app.');return}
@@ -708,6 +721,7 @@ function vProfile(){
   +'<section class="sec" aria-labelledby="pref-h"><h2 id="pref-h">Preferências</h2>'+sw(S.hide,'toggle-hide','Ocultar valores','Esconde saldos e valores em todas as telas')
   +'<button class="setrow" data-act="opening-edit"><span class="t"><span>Saldo inicial da conta</span><span class="h">Saldo antes dos lançamentos: '+esc(money(S.opening||0))+'</span></span>'+ico('chev-r')+'</button>'
   +'<button class="setrow" data-act="go" data-r="plan"><span class="t"><span>Planejamento</span><span class="h">Limite mensal e metas de economia</span></span>'+ico('chev-r')+'</button>'
+  +'<button class="setrow" data-act="cats"><span class="t"><span>Categorias</span><span class="h">'+((S.cats||[]).length?(S.cats.length+(S.cats.length===1?' personalizada':' personalizadas')):'Crie as suas próprias categorias')+'</span></span>'+ico('chev-r')+'</button>'
   +'<button class="setrow" data-act="backup"><span class="t"><span>Backup completo (JSON)</span><span class="h">Tudo em um arquivo, para guardar ou trocar de aparelho</span></span>'+ico('download')+'</button>'
   +'<button class="setrow" data-act="restore"><span class="t"><span>Restaurar backup</span><span class="h">Substitui os dados atuais pelos de um arquivo de backup</span></span>'+ico('chev-r')+'</button><input type="file" id="bk-file" accept=".json,application/json" hidden>'
   +'<button class="setrow" data-act="export"><span class="t"><span>Exportar transações (CSV)</span><span class="h">'+S.tx.length+' transações em um arquivo de planilha</span></span>'+ico('download')+'</button></section>'
@@ -726,6 +740,7 @@ function renderGate(){
   $('#view').innerHTML=ui.loading?vLoading():ui.loadErr?vLoadErr():vAuth();
 }
 function render(){
+  syncCats();
   if(!session||ui.auth||ui.loading||ui.loadErr){renderGate();return}
   $('#nav').hidden=false;
   if(applyRec())save();
@@ -790,15 +805,27 @@ function txSheet(id){
   const t=id?S.tx.find(x=>x.id===id):null;if(id&&!t)return;
   ui.editId=t?t.id:null;
   const type=t?t.type:'expense',pend=!!(t&&t.pending);
-  const html='<form id="txf" novalidate><div class="field"><span class="fl" id="tl">Tipo</span><div class="seg" role="radiogroup" aria-labelledby="tl"><label class="seg-i"><input type="radio" name="type" value="expense"'+(type==='expense'?' checked':'')+'><span>Despesa</span></label><label class="seg-i"><input type="radio" name="type" value="income"'+(type==='income'?' checked':'')+'><span>Receita</span></label></div></div>'
+  const rc=t?[]:recents();
+  const html='<form id="txf" novalidate>'+(rc.length?'<div class="field"><span class="fl">Repetir um recente</span><div class="chips" style="margin:0">'+rc.map(x=>'<button type="button" class="chip" data-act="tx-fill" data-id="'+x.id+'">'+esc(x.desc)+' · '+money(x.amt)+'</button>').join('')+'</div></div>':'')+'<div class="field"><span class="fl" id="tl">Tipo</span><div class="seg" role="radiogroup" aria-labelledby="tl"><label class="seg-i"><input type="radio" name="type" value="expense"'+(type==='expense'?' checked':'')+'><span>Despesa</span></label><label class="seg-i"><input type="radio" name="type" value="income"'+(type==='income'?' checked':'')+'><span>Receita</span></label></div></div>'
   +'<div class="field"><label for="f-desc">Descrição</label><input class="input" id="f-desc" maxlength="60" autocomplete="off" placeholder="Ex.: Supermercado" value="'+esc(t?t.desc:'')+'" aria-describedby="e-f-desc" data-autofocus><div class="err" id="e-f-desc" hidden></div></div>'
   +'<div class="field"><label for="f-amt">Valor (R$)</label><input class="input" id="f-amt" inputmode="decimal" autocomplete="off" placeholder="0,00" value="'+(t?numIn(t.amt):'')+'" aria-describedby="e-f-amt"><div class="err" id="e-f-amt" hidden></div></div>'
   +'<div class="field"><label for="f-cat">Categoria</label><select id="f-cat" aria-describedby="e-f-cat">'+catOpts(type,t?t.cat:null)+'</select><div class="err" id="e-f-cat" hidden></div></div>'
   +'<div class="field"><label for="f-date">Data (vencimento, se agendada)</label><input class="input" id="f-date" type="date" value="'+(t?t.date:today())+'" aria-describedby="e-f-date"><div class="err" id="e-f-date" hidden></div></div>'
   +'<div class="field"><span class="fl" id="sl">Situação</span><div class="seg" role="radiogroup" aria-labelledby="sl"><label class="seg-i"><input type="radio" name="status" value="done"'+(pend?'':' checked')+'><span>Realizada</span></label><label class="seg-i"><input type="radio" name="status" value="pending"'+(pend?' checked':'')+'><span>Agendada</span></label></div><div class="lbl">Agendada é uma conta a pagar ou a receber: só entra no saldo quando você marcar como paga.</div></div>'
   +(t?(t.recId?'<p class="lbl" style="margin-bottom:16px">Faz parte de um lançamento recorrente.</p>':''):'<label class="chk"><input type="checkbox" id="f-rec"><span>Repetir todo mês neste dia</span></label>')
-  +'<div class="actions"><button class="btn btn-p" type="submit">'+(t?'Salvar alterações':'Adicionar')+'</button>'+(t?'<button class="btn btn-d" type="button" data-act="tx-del" data-id="'+t.id+'">Excluir</button>':'')+'</div></form>';
+  +'<div class="actions"><button class="btn btn-p" type="submit">'+(t?'Salvar alterações':'Adicionar')+'</button>'+(t?'<button class="btn btn-s" type="button" data-act="tx-dup" data-id="'+t.id+'">Duplicar</button><button class="btn btn-d" type="button" data-act="tx-del" data-id="'+t.id+'">Excluir</button>':'')+'</div></form>';
   openSheet(t?'Editar transação':'Nova transação',html);
+}
+function recents(){
+  const seen=new Set(),out=[];
+  [...S.tx].sort((a,b)=>b.ts-a.ts).forEach(t=>{const k=t.type+'|'+norm(t.desc)+'|'+t.amt;if(!seen.has(k)&&out.length<6){seen.add(k);out.push(t)}});
+  return out;
+}
+function fillTx(t){
+  const r=document.querySelector('#txf input[name=type][value='+t.type+']');if(r)r.checked=true;
+  $('#f-cat').innerHTML=catOpts(t.type,t.cat);$('#f-desc').value=t.desc;$('#f-amt').value=numIn(t.amt);$('#f-date').value=today();
+  const st=document.querySelector('#txf input[name=status][value=done]');if(st)st.checked=true;
+  ['f-desc','f-amt'].forEach(i=>setErr(i,null));$('#f-amt').focus();
 }
 function txSubmit(){
   const type=$('#txf input[name=type]:checked').value,desc=$('#f-desc').value.trim(),raw=$('#f-amt').value,amt=parseMoney(raw),cat=$('#f-cat').value,date=$('#f-date').value;
@@ -873,6 +900,52 @@ function limitSubmit(){
   if(!raw.trim()){setErr('l-val','Informe o limite mensal.');$('#l-val').focus();return}
   if(!(v>0)){setErr('l-val','Use um valor maior que zero.');$('#l-val').focus();return}
   S.limit=v;save();render();toast('Limite mensal salvo.');
+}
+
+/* ---------- categorias personalizadas ---------- */
+function catsSheet(){
+  const cs=S.cats||[];
+  openSheet('Categorias','<p class="lbl">Crie categorias do seu jeito. As categorias padrão não podem ser alteradas.</p>'
+  +(cs.length?'<ul class="list">'+cs.map(c=>'<li><button class="row" data-act="cat-edit" data-id="'+c.id+'"><span class="ico">'+ico('tag','s')+'</span><span class="rt"><span class="rd">'+esc(c.name)+'</span><span class="rs">'+(c.type==='income'?'Receita':'Despesa')+'</span></span>'+ico('chev-r')+'</button></li>').join('')+'</ul>':'')
+  +'<form id="catf" novalidate style="margin-top:16px"><div class="field"><label for="c-name">Nova categoria</label><input class="input" id="c-name" maxlength="24" autocomplete="off" placeholder="Ex.: Pets" aria-describedby="e-c-name" data-autofocus><div class="err" id="e-c-name" hidden></div></div>'
+  +'<div class="field"><span class="fl" id="ctl">Tipo</span><div class="seg" role="radiogroup" aria-labelledby="ctl"><label class="seg-i"><input type="radio" name="ctype" value="expense" checked><span>Despesa</span></label><label class="seg-i"><input type="radio" name="ctype" value="income"><span>Receita</span></label></div></div>'
+  +'<div class="actions"><button class="btn btn-p" type="submit">Adicionar</button></div></form>');
+}
+function catNameErr(nm,selfId){
+  if(nm.length<2)return 'Use pelo menos 2 letras.';
+  const n=norm(nm);
+  if(ALLC.some(c=>norm(c)===n)&&!((S.cats||[]).some(c=>c.id===selfId&&norm(c.name)===n)))return 'Já existe uma categoria com esse nome.';
+  return '';
+}
+function catSubmit(){
+  const nm=$('#c-name').value.trim().replace(/\s+/g,' '),type=$('#catf input[name=ctype]:checked').value,e=catNameErr(nm);
+  setErr('c-name',null);if(e){setErr('c-name',e);$('#c-name').focus();return}
+  S.cats=(S.cats||[]).concat([{id:uid(),type,name:nm}]);save();syncCats();catsSheet();render();toast('Categoria criada.');
+}
+function catEditSheet(id){
+  const c=(S.cats||[]).find(x=>x.id===id);if(!c)return;ui.editId=id;
+  const n=S.tx.filter(t=>t.cat===c.name).length;
+  openSheet('Editar categoria','<p class="lbl">'+(c.type==='income'?'Receita':'Despesa')+' · '+n+(n===1?' transação':' transações')+'</p><form id="catef" novalidate><div class="field"><label for="ce-name">Nome</label><input class="input" id="ce-name" maxlength="24" autocomplete="off" value="'+esc(c.name)+'" aria-describedby="e-ce-name" data-autofocus><div class="err" id="e-ce-name" hidden></div></div><div class="actions"><button class="btn btn-p" type="submit">Salvar</button><button class="btn btn-d" type="button" data-act="cat-del" data-id="'+c.id+'">Excluir</button></div></form>');
+}
+function catEditSubmit(){
+  const c=(S.cats||[]).find(x=>x.id===ui.editId);if(!c)return;
+  const nm=$('#ce-name').value.trim().replace(/\s+/g,' '),e=catNameErr(nm,c.id);setErr('ce-name',null);
+  if(e){setErr('ce-name',e);$('#ce-name').focus();return}
+  const old=c.name;c.name=nm;
+  S.tx.forEach(t=>{if(t.cat===old)t.cat=nm});(S.rec||[]).forEach(r=>{if(r.cat===old)r.cat=nm});
+  if(S.budgets&&old in S.budgets){S.budgets[nm]=S.budgets[old];delete S.budgets[old]}
+  ['cat'].forEach(k=>{if(ui.r[k]===old)ui.r[k]=nm;if(ui.h[k]===old)ui.h[k]=nm});
+  save();syncCats();catsSheet();render();toast('Categoria atualizada.');
+}
+function catDelete(id){
+  const c=(S.cats||[]).find(x=>x.id===id);if(!c)return;
+  const n=S.tx.filter(t=>t.cat===c.name).length;
+  confirmSheet('Excluir categoria','"'+c.name+'" será removida.'+(n?' As '+n+(n===1?' transação dela passa':' transações dela passam')+' para "Outros".':''),'Excluir',()=>{
+    S.tx.forEach(t=>{if(t.cat===c.name)t.cat='Outros'});(S.rec||[]).forEach(r=>{if(r.cat===c.name)r.cat='Outros'});
+    if(S.budgets)delete S.budgets[c.name];
+    if(ui.r.cat===c.name)ui.r.cat='all';if(ui.h.cat===c.name)ui.h.cat='all';
+    S.cats=S.cats.filter(x=>x.id!==id);save();syncCats();render();toast('Categoria excluída.');
+  });
 }
 
 /* ---------- exportação ---------- */
@@ -967,6 +1040,11 @@ document.addEventListener('click',async e=>{
     case 'goal-del':{const i=S.goals.findIndex(x=>x.id===id);if(i<0)break;const g=S.goals.splice(i,1)[0];save();closeSheet();render();toast('Meta excluída.',{label:'Desfazer',fn:()=>{S.goals.splice(Math.min(i,S.goals.length),0,g);save();render();toast('Exclusão desfeita.')}});break}
     case 'limit-clear':S.limit=null;save();render();toast('Limite removido.');break;
     case 'export':exportCsv();break;
+    case 'cats':catsSheet();break;
+    case 'cat-edit':catEditSheet(id);break;
+    case 'cat-del':catDelete(id);break;
+    case 'tx-fill':{const t=S.tx.find(x=>x.id===id);if(t)fillTx(t);break}
+    case 'tx-dup':{const t=S.tx.find(x=>x.id===id);if(t){txSheet(null);fillTx(t)}break}
     case 'backup':deliver('fluxo-backup-'+today()+'.json',backupText(),'application/json','Backup completo');break;
     case 'restore':{const f=$('#bk-file');if(f)f.click();break}
     case 'rep-bar':{const n=+el.dataset.i;ui.rb=ui.rb===n?-1:n;paintRep();break}
@@ -994,6 +1072,8 @@ document.addEventListener('submit',e=>{
     case 'home-ask':{const q=$('#home-q').value;if(!q.trim())return;go('chat');ask(q);break}
     case 'chat-form':{const i=$('#chat-q'),q=i.value;if(!q.trim())return;i.value='';ask(q);break}
     case 'txf':txSubmit();break;
+    case 'catf':catSubmit();break;
+    case 'catef':catEditSubmit();break;
     case 'goalf':goalSubmit();break;
     case 'contf':contSubmit();break;
     case 'limf':limitSubmit();break;
