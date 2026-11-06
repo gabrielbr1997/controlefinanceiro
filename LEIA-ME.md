@@ -22,6 +22,13 @@ O app é um site estático (sem compilação) com login de e-mail e senha e dado
 - Os dados também ficam em cópia no aparelho, então o app abre e aceita lançamentos mesmo sem internet. As alterações são enviadas quando a conexão volta.
 - Se a mesma conta for usada em dois aparelhos, vale a última alteração enviada. Evite lançar nos dois ao mesmo tempo.
 
+## Relatórios, agendadas, recorrentes e backup
+
+- **Relatórios** (aba do meio): escolha o período (mês, 30 ou 90 dias, ano, tudo ou datas personalizadas) e, se quiser, uma categoria. O painel mostra recebido, gasto, resultado, comparação com o período anterior, gráfico de entradas e saídas, gastos por categoria, maiores lançamentos e o andamento das metas.
+- **Agendada**: ao lançar, escolha "Agendada" para contas a pagar ou a receber. Elas não entram no saldo até você tocar em "Marcar como paga" ou "Marcar como recebida".
+- **Repetir todo mês**: marque ao criar um lançamento. O app cria os próximos como agendados; para parar, use "Encerrar" na aba Relatórios.
+- **Backup completo (JSON)** e **Restaurar backup**: no Perfil. O arquivo contém todos os seus dados, então guarde-o em local seguro. Restaurar substitui os dados atuais da conta.
+
 ## Parte 1: criar o projeto no Supabase (uns 10 minutos)
 
 Os nomes dos menus podem variar um pouco, porque o Supabase atualiza o painel de tempos em tempos.
