@@ -52,3 +52,21 @@ drop trigger if exists user_data_updated_at on public.user_data;
 create trigger user_data_updated_at
   before update on public.user_data
   for each row execute function public.set_updated_at();
+
+-- Permite que a própria pessoa exclua a conta de acesso. Os dados dela somem junto (on delete cascade).
+create or replace function public.delete_my_account()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if (select auth.uid()) is null then
+    raise exception 'not authenticated';
+  end if;
+  delete from auth.users where id = (select auth.uid());
+end;
+$$;
+
+revoke all on function public.delete_my_account() from public, anon;
+grant execute on function public.delete_my_account() to authenticated;

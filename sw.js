@@ -2,7 +2,7 @@
    - Arquivos do próprio app: tenta a rede primeiro (sempre a versão mais nova) e usa o cache quando estiver offline.
    - Fontes do Google: usa o cache e atualiza em segundo plano.
    Para forçar a atualização em todos os aparelhos depois de mudar o app, aumente o número em VERSION. */
-const VERSION = 'fluxo-v5';
+const VERSION = 'fluxo-v6';
 const SHELL = [
   '/', '/index.html', '/styles.css', '/config.js', '/app.js', '/manifest.webmanifest', '/favicon.svg',
   '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png', '/icons/apple-touch-icon.png'

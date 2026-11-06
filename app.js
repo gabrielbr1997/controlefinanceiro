@@ -753,13 +753,14 @@ function vProfile(){
   +'<button class="setrow" data-act="cats"><span class="t"><span>Categorias</span><span class="h">'+((S.cats||[]).length?(S.cats.length+(S.cats.length===1?' personalizada':' personalizadas')):'Crie as suas próprias categorias')+'</span></span>'+ico('chev-r')+'</button>'
   +'<button class="setrow" data-act="backup"><span class="t"><span>Backup completo (JSON)</span><span class="h">Tudo em um arquivo, para guardar ou trocar de aparelho</span></span>'+ico('download')+'</button>'
   +'<button class="setrow" data-act="restore"><span class="t"><span>Restaurar backup</span><span class="h">Substitui os dados atuais pelos de um arquivo de backup</span></span>'+ico('chev-r')+'</button><input type="file" id="bk-file" accept=".json,application/json" hidden>'
+  +'<button class="setrow" data-act="import"><span class="t"><span>Importar extrato (CSV)</span><span class="h">Traz lançamentos do banco ou da fatura do cartão</span></span>'+ico('chev-r')+'</button><input type="file" id="imp-file" accept=".csv,text/csv,text/plain" hidden>'
   +'<button class="setrow" data-act="export"><span class="t"><span>Exportar transações (CSV)</span><span class="h">'+S.tx.length+' transações em um arquivo de planilha</span></span>'+ico('download')+'</button></section>'
   +'<section class="sec" aria-labelledby="acc-h"><h2 id="acc-h">Conta e dados</h2>'
   +(LOCAL?'<p class="note" style="margin-top:8px">'+(SECRETKEY?'O config.js contém uma chave secreta do Supabase. Troque pela chave pública (anon ou publishable) e nunca publique a chave secreta.':'O login ainda não foi configurado neste site, então os dados ficam só neste aparelho e não sincronizam. O LEIA-ME explica como ativar o login.')+'</p>'
     :'<div class="setrow"><span class="t"><span>Sincronização</span><span class="h" id="sync-st"></span></span></div>')
   +'<p class="note">O app nunca pede senha de banco nem número de cartão.</p>'
   +sw(S.simFail,'toggle-sim','Simular falha do assistente','Só para testar a mensagem de erro')
-  +'<div class="actions" style="margin-top:16px">'+(LOCAL?'':'<button class="btn btn-s" data-act="logout">Sair da conta</button>')+'<button class="btn btn-d" data-act="wipe">Apagar meus dados</button></div></section>';
+  +'<div class="actions" style="margin-top:16px">'+(LOCAL?'':'<button class="btn btn-s" data-act="logout">Sair da conta</button>')+'<button class="btn btn-d" data-act="wipe">Apagar meus dados</button>'+(LOCAL?'':'<button class="btn btn-d" data-act="delacc">Excluir minha conta</button>')+'</div></section>';
 }
 const VIEWS={home:vHome,chat:vChat,rep:vRep,hist:vHist,plan:vPlan,profile:vProfile};
 
@@ -950,6 +951,142 @@ function limitSubmit(){
   S.limit=v;save();render();toast('Limite mensal salvo.');
 }
 
+/* ---------- importar extrato CSV ---------- */
+function csvRows(text){
+  text=text.replace(/^﻿/,'');
+  const first=text.split(/\r?\n/,1)[0]||'',cnt=c=>first.split(c).length-1;
+  const d=[';',',','\t'].sort((a,b)=>cnt(b)-cnt(a))[0],rows=[];
+  let row=[],cell='',q=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(q){if(ch==='"'){if(text[i+1]==='"'){cell+='"';i++}else q=false}else cell+=ch}
+    else if(ch==='"')q=true;
+    else if(ch===d){row.push(cell);cell=''}
+    else if(ch==='\n'||ch==='\r'){if(ch==='\r'&&text[i+1]==='\n')i++;row.push(cell);cell='';if(row.some(c=>c.trim()!==''))rows.push(row);row=[]}
+    else cell+=ch;
+  }
+  row.push(cell);if(row.some(c=>c.trim()!==''))rows.push(row);
+  return rows;
+}
+function sepKind(s,ch){const p=s.split(ch);if(p.length>2)return 'th';return(p[1].length===3&&p[0]!==''&&p[0]!=='0')?'th':'dec'}
+function parseAmt(s){
+  s=String(s==null?'':s).trim();if(!s)return NaN;
+  let neg=false;
+  if(/^\(.*\)$/.test(s)){neg=true;s=s.slice(1,-1)}
+  s=s.replace(/R\$|\s/gi,'');
+  if(/^-|-$/.test(s)){neg=!neg;s=s.replace(/^-|-$/g,'')}
+  s=s.replace(/^\+/,'');
+  if(!/^[\d.,]+$/.test(s))return NaN;
+  const lc=s.lastIndexOf(','),ld=s.lastIndexOf('.');let num;
+  if(lc>=0&&ld>=0){const dec=lc>ld?',':'.',th=dec===','?'.':',';num=s.split(th).join('').replace(dec,'.')}
+  else if(lc>=0)num=sepKind(s,',')==='th'?s.split(',').join(''):s.replace(',','.');
+  else if(ld>=0)num=sepKind(s,'.')==='th'?s.split('.').join(''):s;
+  else num=s;
+  const v=parseFloat(num);if(!isFinite(v))return NaN;
+  return neg?-r2(v):r2(v);
+}
+function parseDateAny(s){
+  s=String(s==null?'':s).trim();let m;
+  if((m=s.match(/^(\d{4})-(\d{2})-(\d{2})/))){const d=m[1]+'-'+m[2]+'-'+m[3];return validDate(d)?d:''}
+  if((m=s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4}|\d{2})(?!\d)/))){const y=m[3].length===2?'20'+m[3]:m[3],d=y+'-'+pad(+m[2])+'-'+pad(+m[1]);return validDate(d)?d:''}
+  return '';
+}
+function mapCols(h){
+  const used=new Set(),f=re=>{const i=h.findIndex((c,k)=>!used.has(k)&&re.test(c));if(i>=0)used.add(i);return i};
+  const date=f(/^(data|date|dt)\b|^data (da )?(compra|lancamento|transacao|movimentacao)/),amt=f(/^(valor|amount|value|quantia)/),cred=amt<0?f(/credito|entrada/):-1,deb=amt<0?f(/debito|saida/):-1,type=f(/^(tipo|type|natureza|d\/c|dc)$/),desc=f(/descri|histor|lancamento|memo|estabelec|detalhe|titulo|title|nome|name|payee|merchant/);
+  return{date,amt,cred,deb,type,desc};
+}
+function importParse(text){
+  const rows=csvRows(text);if(rows.length<2)return null;
+  let hi=-1,m=null;
+  for(let i=0;i<Math.min(rows.length,15);i++){const mm=mapCols(rows[i].map(norm));if(mm.date>=0&&(mm.amt>=0||mm.cred>=0||mm.deb>=0)){hi=i;m=mm;break}}
+  if(!m){
+    const r=rows[0],di=r.findIndex(c=>parseDateAny(c));let ai=-1;
+    r.forEach((c,i)=>{if(i!==di&&isFinite(parseAmt(c)))ai=i});
+    if(di<0||ai<0)return null;
+    let dc=-1,best=-1;r.forEach((c,i)=>{if(i!==di&&i!==ai&&c.trim().length>best){best=c.trim().length;dc=i}});
+    m={date:di,amt:ai,cred:-1,deb:-1,type:-1,desc:dc};
+  }
+  if(m.desc<0){
+    const skip=new Set([m.date,m.amt,m.cred,m.deb,m.type]);let best=-1,bl=0;
+    rows.slice(hi+1,hi+11).forEach(r=>r.forEach((c,i)=>{if(!skip.has(i)&&c.trim().length>bl&&!isFinite(parseAmt(c))){bl=c.trim().length;best=i}}));
+    m.desc=best;
+  }
+  let bad=0;const items=[];
+  rows.slice(hi+1).forEach(r=>{
+    const date=parseDateAny(r[m.date]);let a=NaN,forced=null;
+    if(m.amt>=0)a=parseAmt(r[m.amt]);
+    else{const c=m.cred>=0?parseAmt(r[m.cred]):NaN,d=m.deb>=0?parseAmt(r[m.deb]):NaN;if(c>0){a=c;forced='income'}else if(d!==0&&isFinite(d)){a=Math.abs(d);forced='expense'}}
+    if(m.type>=0){const t=norm(r[m.type]||'');if(/^(c|cred|credito|entrada|receita)/.test(t))forced='income';else if(/^(d|deb|debito|saida|despesa)/.test(t))forced='expense'}
+    if(!date||!isFinite(a)||a===0){bad++;return}
+    items.push({date,a,forced,desc:(m.desc>=0?String(r[m.desc]||''):'').trim().replace(/\s+/g,' ').slice(0,60)||'Importado'});
+  });
+  return{items,bad};
+}
+function importBuild(){
+  const im=ui.imp,exist=new Map(),out=[];let dup=0;
+  S.tx.forEach(t=>{const k=t.date+'|'+t.type+'|'+t.amt+'|'+norm(t.desc);exist.set(k,(exist.get(k)||0)+1)});
+  im.items.forEach(it=>{
+    const type=it.forced||((im.flip?it.a>0:it.a<0)?'expense':'income'),amt=r2(Math.abs(it.a));
+    if(!(amt>0)||amt>9999999.99)return;
+    const k=it.date+'|'+type+'|'+amt+'|'+norm(it.desc);
+    if((exist.get(k)||0)>0){exist.set(k,exist.get(k)-1);dup++;return}
+    const n=norm(it.desc);
+    const cat=type==='expense'?(catFrom(n)||'Outros'):(n.includes('salario')?'Salário':n.includes('freela')?'Freelance':(n.includes('rendi')||n.includes('invest'))?'Investimentos':'Outros');
+    out.push({type,desc:it.desc,amt,cat,date:it.date});
+  });
+  return{out,dup};
+}
+function importSheet(){
+  openSheet('Importar extrato','<p class="lbl" id="imp-sum" aria-live="polite"></p><label class="chk"><input type="checkbox" id="imp-flip"><span>Valores positivos são despesas (comum em fatura de cartão)</span></label><div id="imp-tbl"></div><p class="lbl" id="imp-note"></p><div class="actions"><button class="btn btn-p" id="imp-go" data-act="imp-go">Importar</button></div>');
+  paintImp();
+}
+function paintImp(){
+  const im=ui.imp;if(!im||!$('#imp-sum'))return;
+  const{out,dup}=importBuild(),inc=out.filter(x=>x.type==='income'),ex=out.filter(x=>x.type==='expense');
+  $('#imp-sum').textContent=out.length?out.length+(out.length===1?' lançamento novo: ':' lançamentos novos: ')+inc.length+' receitas ('+money(sum(inc))+') e '+ex.length+' despesas ('+money(sum(ex))+').':'Nada novo para importar.';
+  $('#imp-tbl').innerHTML=out.length?'<p class="lbl" style="margin-top:8px">Confira se receitas e despesas estão certas:</p><ul class="list">'+out.slice(0,5).map(x=>'<li><div class="row"><span class="ico">'+ico(CI[x.cat]||'tag','s')+'</span><span class="rt"><span class="rd">'+esc(x.desc)+'</span><span class="rs">'+esc(dLabel(x.date))+' · '+esc(x.cat)+'</span></span><span class="ra num '+(x.type==='income'?'inc':'')+'">'+sgn(x.type,x.amt)+'</span></div></li>').join('')+'</ul>':'';
+  const notes=[];if(dup)notes.push(dup+(dup===1?' já existe e será ignorado':' já existem e serão ignorados'));if(im.bad)notes.push(im.bad+(im.bad===1?' linha sem data ou valor válido foi ignorada':' linhas sem data ou valor válido foram ignoradas'));if(im.trunc)notes.push('só os 2.000 primeiros lançamentos serão lidos');
+  $('#imp-note').textContent=notes.join(' · ');
+  const g=$('#imp-go');g.disabled=!out.length;g.textContent=out.length?'Importar '+out.length:'Importar';
+}
+function importGo(){
+  if(!ui.imp)return;const{out}=importBuild();if(!out.length)return;
+  out.forEach((x,i)=>S.tx.push({id:uid(),ts:Date.now()+i,type:x.type,desc:x.desc,amt:x.amt,cat:x.cat,date:x.date}));
+  ui.imp=null;save();closeSheet();render();toast(out.length+(out.length===1?' lançamento importado.':' lançamentos importados.'));
+}
+async function readText(f){
+  const b=await f.arrayBuffer();
+  try{return new TextDecoder('utf-8',{fatal:true}).decode(b)}catch(e){return new TextDecoder('windows-1252').decode(b)}
+}
+async function importFile(f){
+  if(f.size>1.5e6){toast('Arquivo grande demais. Importe um período menor.');return}
+  let p=null;try{p=importParse(await readText(f))}catch(e){}
+  if(!p||!p.items.length){toast('Não encontrei lançamentos. O arquivo precisa de colunas de data e de valor.');return}
+  ui.imp={items:p.items.slice(0,2000),bad:p.bad,flip:false,trunc:p.items.length>2000};
+  importSheet();
+}
+
+/* ---------- excluir conta ---------- */
+function delAccSheet(){
+  openSheet('Excluir minha conta','<p>Isso apaga a sua conta de acesso e todos os dados dela, na nuvem e neste aparelho. Não dá para desfazer.</p><form id="delf" novalidate style="margin-top:12px"><div class="field"><label for="d-word">Digite EXCLUIR para confirmar</label><input class="input" id="d-word" autocomplete="off" autocapitalize="characters" aria-describedby="e-d-word" data-autofocus><div class="err" id="e-d-word" hidden></div></div><div class="actions"><button class="btn btn-d" id="d-go" type="submit">Excluir minha conta</button></div></form>');
+}
+async function delAccSubmit(){
+  const w=$('#d-word').value;setErr('d-word',null);
+  if(norm(w).trim()!=='excluir'){setErr('d-word','Digite a palavra EXCLUIR para continuar.');$('#d-word').focus();return}
+  const b=$('#d-go');b.disabled=true;
+  try{
+    const tok=await ensureToken();
+    await api('/rest/v1/rpc/delete_my_account',{method:'POST',token:tok,body:{}});
+  }catch(e){
+    b.disabled=false;
+    if(!session)return;
+    setErr('d-word',(e&&(e.status===404||/function|schema cache/i.test(e.message||'')))?'Falta atualizar o banco. Rode de novo o arquivo schema.sql no Supabase e tente outra vez.':authErr(e));
+    return;
+  }
+  dropSession('Sua conta foi excluída.',true);
+}
+
 /* ---------- categorias personalizadas ---------- */
 function catsSheet(){
   const cs=S.cats||[];
@@ -1089,6 +1226,9 @@ document.addEventListener('click',async e=>{
     case 'goal-del':{const i=S.goals.findIndex(x=>x.id===id);if(i<0)break;const g=S.goals.splice(i,1)[0];save();closeSheet();render();toast('Meta excluída.',{label:'Desfazer',fn:()=>{S.goals.splice(Math.min(i,S.goals.length),0,g);save();render();toast('Exclusão desfeita.')}});break}
     case 'limit-clear':S.limit=null;save();render();toast('Limite removido.');break;
     case 'export':exportCsv();break;
+    case 'import':{const f=$('#imp-file');if(f)f.click();break}
+    case 'imp-go':importGo();break;
+    case 'delacc':delAccSheet();break;
     case 'budget-new':budgetSheet(null);break;
     case 'budget-edit':if(EXP.includes(el.dataset.c))budgetSheet(el.dataset.c);break;
     case 'budget-del':{const c=el.dataset.c;if(S.budgets&&c in S.budgets){const v=S.budgets[c];const b=Object.assign({},S.budgets);delete b[c];S.budgets=b;save();closeSheet();render();toast('Orçamento removido.',{label:'Desfazer',fn:()=>{S.budgets=Object.assign({},S.budgets,{[c]:v});save();render()}})}break}
@@ -1125,6 +1265,7 @@ document.addEventListener('submit',e=>{
     case 'chat-form':{const i=$('#chat-q'),q=i.value;if(!q.trim())return;i.value='';ask(q);break}
     case 'txf':txSubmit();break;
     case 'catf':catSubmit();break;
+    case 'delf':delAccSubmit();break;
     case 'budgf':budgetSubmit();break;
     case 'catef':catEditSubmit();break;
     case 'goalf':goalSubmit();break;
@@ -1151,6 +1292,8 @@ document.addEventListener('change',e=>{
   if(t.id==='r-cat'){ui.r.cat=ALLC.includes(t.value)?t.value:'all';ui.rb=-1;paintRep()}
   if(t.id==='r-from'){ui.r.from=t.value;ui.rb=-1;paintRep()}
   if(t.id==='r-to'){ui.r.to=t.value;ui.rb=-1;paintRep()}
+  if(t.id==='imp-file'){const f=t.files&&t.files[0];t.value='';if(f)importFile(f)}
+  if(t.id==='imp-flip'&&ui.imp){ui.imp.flip=t.checked;paintImp()}
   if(t.id==='bk-file'){const f=t.files&&t.files[0];t.value='';if(f)restoreFile(f)}
   if(t.id==='h-from'){ui.h.from=t.value;paintHist()}
   if(t.id==='h-to'){ui.h.to=t.value;paintHist()}
