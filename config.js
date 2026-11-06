@@ -1,10 +1,8 @@
-/* Configuração pública do login (Supabase).
-   Preencha os dois valores com os dados do seu projeto, em Project Settings > API:
-   - supabaseUrl: o "Project URL" (algo como https://abcdefgh.supabase.co)
-   - supabaseAnonKey: a chave PÚBLICA (anon ou publishable).
-   NUNCA coloque aqui a chave service_role nem a chave secreta (sb_secret_...).
-   Enquanto estes campos estiverem vazios, o app funciona sem login e guarda os dados só neste aparelho. */
+// Configuração pública do Supabase.
+// Preencha com o Project URL e a chave PÚBLICA (anon / publishable).
+// NUNCA coloque aqui a service_role nem uma chave sb_secret_.
+// Enquanto estiver vazio, o app roda sem login e guarda os dados só no aparelho.
 window.FLUXO_CONFIG = {
-  supabaseUrl: '',
-  supabaseAnonKey: ''
+  supabaseUrl: 'https://ideujymdxciloibobbcz.supabase.co',
+  supabaseAnonKey: 'sb_publishable_fbEwxl04_qbu51l55irwrQ_l8JjiwAG'
 };
