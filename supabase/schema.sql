@@ -70,3 +70,34 @@ $$;
 
 revoke all on function public.delete_my_account() from public, anon;
 grant execute on function public.delete_my_account() to authenticated;
+
+-- Telegram: vínculo entre a conta e o chat do bot.
+-- A pessoa só consegue gerar o código; quem grava o chat_id é o servidor do bot (chave de serviço).
+create table if not exists public.telegram_links (
+  user_id         uuid primary key references auth.users (id) on delete cascade,
+  code            text unique,
+  code_expires_at timestamptz,
+  chat_id         bigint unique,
+  linked_at       timestamptz
+);
+
+alter table public.telegram_links enable row level security;
+
+drop policy if exists tg_select_own on public.telegram_links;
+drop policy if exists tg_insert_own on public.telegram_links;
+drop policy if exists tg_update_own on public.telegram_links;
+drop policy if exists tg_delete_own on public.telegram_links;
+
+create policy tg_select_own on public.telegram_links
+  for select to authenticated using ((select auth.uid()) = user_id);
+create policy tg_insert_own on public.telegram_links
+  for insert to authenticated with check ((select auth.uid()) = user_id);
+create policy tg_update_own on public.telegram_links
+  for update to authenticated using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
+create policy tg_delete_own on public.telegram_links
+  for delete to authenticated using ((select auth.uid()) = user_id);
+
+revoke all on public.telegram_links from anon, authenticated;
+grant select, delete on public.telegram_links to authenticated;
+grant insert (user_id, code, code_expires_at) on public.telegram_links to authenticated;
+grant update (user_id, code, code_expires_at) on public.telegram_links to authenticated;

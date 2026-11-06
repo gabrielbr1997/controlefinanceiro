@@ -1,0 +1,5 @@
+{
+  "name": "fluxo-pessoal",
+  "private": true,
+  "engines": { "node": "20.x" }
+}

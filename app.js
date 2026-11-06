@@ -98,7 +98,7 @@ function authErr(e){
   if(e.status===429||/rate limit/i.test(c+m))return 'Muitas tentativas. Aguarde alguns minutos e tente de novo.';
   return 'Não foi possível concluir agora. Tente novamente em instantes.';
 }
-const sync={rev:0,dirty:false,busy:false,t:null,last:'',remoteAt:null,state:'ok'};
+const sync={rev:0,dirty:false,busy:false,t:null,last:'',remoteAt:null,state:'ok',cf:0,known:new Set()};
 const stable=o=>JSON.stringify(o,(k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.keys(v).sort().reduce((a,x)=>(a[x]=v[x],a),{}):v);
 const cloudData=()=>{const o=Object.assign({},S);delete o.chat;delete o.month;delete o.simFail;return o};
 const validRemote=d=>!!d&&typeof d==='object'&&Array.isArray(d.tx)&&Array.isArray(d.goals);
@@ -115,6 +115,20 @@ function paintSync(){
   const st=$('#sync-st');if(st)st.textContent=txt;
   const top=$('#sync-top');if(top)top.textContent=sync.state==='offline'?'Sem conexão · alterações guardadas no aparelho':sync.state==='error'?'Não foi possível salvar na nuvem agora':'';
 }
+const knownKey=()=>'fluxo.known.'+session.user.id;
+function setKnown(tx){
+  sync.known=new Set(tx.map(t=>t.id));
+  try{if(tx.length<20000)localStorage.setItem(knownKey(),JSON.stringify([...sync.known]));else localStorage.removeItem(knownKey())}catch(e){}
+}
+function loadKnown(){try{const a=JSON.parse(localStorage.getItem(knownKey()));if(Array.isArray(a))return new Set(a.filter(x=>typeof x==='string'))}catch(e){}return new Set()}
+/* traz para cá lançamentos que outro aparelho ou o bot do Telegram criaram e que ainda não conhecíamos */
+function mergeRemote(remote){
+  const have=new Set(S.tx.map(t=>t.id));let n=0;
+  (Array.isArray(remote.tx)?remote.tx:[]).forEach(t=>{
+    if(t&&typeof t.id==='string'&&!have.has(t.id)&&!sync.known.has(t.id)&&typeof t.date==='string'&&validDate(t.date)&&typeof t.amt==='number'&&t.amt>0&&['income','expense'].includes(t.type)){S.tx.push(t);have.add(t.id);n++}
+  });
+  return n;
+}
 async function push(){
   if(!session||LOCAL||sync.busy||!sync.dirty)return;
   const payload=cloudData(),str=stable(payload),r=sync.rev;
@@ -122,7 +136,28 @@ async function push(){
   sync.busy=true;sync.state='saving';paintSync();
   try{
     const tok=await ensureToken();
-    await api('/rest/v1/user_data?on_conflict=user_id',{method:'POST',token:tok,headers:{Prefer:'resolution=merge-duplicates,return=minimal'},body:{user_id:session.user.id,data:payload}});
+    let row=null;
+    if(sync.remoteAt&&sync.cf<5){
+      const rows=await api('/rest/v1/user_data?user_id=eq.'+encodeURIComponent(session.user.id)+'&updated_at=eq.'+encodeURIComponent(sync.remoteAt),{method:'PATCH',token:tok,headers:{Prefer:'return=representation'},body:{data:payload}});
+      row=Array.isArray(rows)&&rows[0]||null;
+      if(!row){
+        /* alguém gravou antes de nós: junta o que é novo e tenta de novo */
+        const remote=await pull();
+        if(remote&&validRemote(remote.data)){
+          sync.cf++;sync.remoteAt=remote.updated_at;
+          const n=mergeRemote(remote.data);
+          sync.busy=false;save();
+          if(n){render();toast(n+(n===1?' lançamento novo chegou':' lançamentos novos chegaram')+' de outro aparelho ou do Telegram.')}
+          return;
+        }
+        sync.remoteAt=null;
+      }
+    }
+    if(!row){
+      const rows=await api('/rest/v1/user_data?on_conflict=user_id',{method:'POST',token:tok,headers:{Prefer:'resolution=merge-duplicates,return=representation'},body:{user_id:session.user.id,data:payload}});
+      row=Array.isArray(rows)&&rows[0]||null;
+    }
+    sync.remoteAt=(row&&row.updated_at)||null;sync.cf=0;setKnown(payload.tx);
     sync.last=str;sync.state='ok';
     if(sync.rev===r){sync.dirty=false;try{localStorage.removeItem('fluxo.dirty.'+session.user.id)}catch(e){}}else schedulePush(300);
   }catch(e){
@@ -139,7 +174,7 @@ async function pull(){
 function adopt(row){
   const keep=S.chat||[];
   S=Object.assign(emptyState(),row.data,{chat:keep,month:mkey(new Date()),simFail:false});
-  sync.last=stable(cloudData());sync.remoteAt=row.updated_at;
+  sync.last=stable(cloudData());sync.remoteAt=row.updated_at;sync.cf=0;setKnown(S.tx);
   try{localStorage.setItem('fluxo.data.'+session.user.id,JSON.stringify(S))}catch(e){}
 }
 async function ensureToken(){
@@ -157,14 +192,14 @@ async function ensureToken(){
 function dropSession(msg,wipe){
   const id=session&&session.user&&session.user.id;
   writeSession(null);clearTimeout(sync.t);sync.dirty=false;sync.busy=false;
-  if(wipe&&id)try{localStorage.removeItem('fluxo.data.'+id);localStorage.removeItem('fluxo.dirty.'+id)}catch(e){}
+  if(wipe&&id)try{localStorage.removeItem('fluxo.data.'+id);localStorage.removeItem('fluxo.dirty.'+id);localStorage.removeItem('fluxo.known.'+id)}catch(e){}
   S=emptyState();ui.pending=null;ui.loading=false;ui.loadErr=false;ui.auth={mode:'login',err:msg||null};
   ui.route='home';try{history.replaceState(null,'',location.pathname+location.search)}catch(e){}
   closeSheet(true);render();
 }
 async function enterApp(){
   ui.auth=null;ui.loadErr=false;
-  S=emptyState();sync.last='';sync.remoteAt=null;sync.rev=0;sync.state='ok';sync.dirty=false;
+  S=emptyState();sync.last='';sync.remoteAt=null;sync.rev=0;sync.state='ok';sync.dirty=false;sync.cf=0;sync.known=LOCAL?new Set():loadKnown();
   let cached=null;
   try{const c=JSON.parse(localStorage.getItem('fluxo.data.'+session.user.id));if(validRemote(c)&&Array.isArray(c.chat))cached=Object.assign(emptyState(),c,{month:mkey(new Date()),simFail:false})}catch(e){}
   if(LOCAL){if(cached)S=cached;ui.loading=false;render();return}
@@ -175,7 +210,7 @@ async function enterApp(){
     const row=await pull();
     if(row&&validRemote(row.data)){
       sync.remoteAt=row.updated_at;
-      if(sync.dirty&&cached){sync.last=stable(row.data);schedulePush(0)}
+      if(sync.dirty&&cached){sync.last=stable(row.data);const n=mergeRemote(row.data);schedulePush(0);if(n)setTimeout(()=>toast(n+(n===1?' lançamento novo chegou':' lançamentos novos chegaram')+' de outro aparelho ou do Telegram.'),600)}
       else{adopt(row);sync.dirty=false}
     }else if(cached){sync.dirty=true;sync.last='';schedulePush(0)}
     sync.state='ok';
@@ -750,6 +785,7 @@ function vProfile(){
   +'<section class="sec" aria-labelledby="pref-h"><h2 id="pref-h">Preferências</h2>'+sw(S.hide,'toggle-hide','Ocultar valores','Esconde saldos e valores em todas as telas')
   +'<button class="setrow" data-act="opening-edit"><span class="t"><span>Saldo inicial da conta</span><span class="h">Saldo antes dos lançamentos: '+esc(money(S.opening||0))+'</span></span>'+ico('chev-r')+'</button>'
   +'<button class="setrow" data-act="go" data-r="plan"><span class="t"><span>Planejamento</span><span class="h">Limite mensal e metas de economia</span></span>'+ico('chev-r')+'</button>'
+  +(LOCAL?'':'<button class="setrow" data-act="telegram"><span class="t"><span>Telegram</span><span class="h">'+(TGOK?'Lance e consulte conversando com o bot':'Ainda não configurado neste site')+'</span></span>'+ico('chev-r')+'</button>')
   +'<button class="setrow" data-act="cats"><span class="t"><span>Categorias</span><span class="h">'+((S.cats||[]).length?(S.cats.length+(S.cats.length===1?' personalizada':' personalizadas')):'Crie as suas próprias categorias')+'</span></span>'+ico('chev-r')+'</button>'
   +'<button class="setrow" data-act="backup"><span class="t"><span>Backup completo (JSON)</span><span class="h">Tudo em um arquivo, para guardar ou trocar de aparelho</span></span>'+ico('download')+'</button>'
   +'<button class="setrow" data-act="restore"><span class="t"><span>Restaurar backup</span><span class="h">Substitui os dados atuais pelos de um arquivo de backup</span></span>'+ico('chev-r')+'</button><input type="file" id="bk-file" accept=".json,application/json" hidden>'
@@ -1067,6 +1103,53 @@ async function importFile(f){
   importSheet();
 }
 
+/* ---------- Telegram ---------- */
+const TGBOT=String(CFG.telegramBot||'').replace(/^@/,'').trim();
+const TGOK=!LOCAL&&/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(TGBOT);
+async function tgStatus(){
+  const tok=await ensureToken();
+  const rows=await api('/rest/v1/telegram_links?select=chat_id,linked_at&user_id=eq.'+encodeURIComponent(session.user.id),{token:tok});
+  return Array.isArray(rows)&&rows[0]||null;
+}
+function tgMsg(t){const st=$('#tg-st');if(st)st.textContent=t}
+async function tgRefresh(){
+  if(!$('#tg-st'))return;
+  let row;
+  try{row=await tgStatus()}catch(e){
+    tgMsg((e&&(e.status===404||/telegram_links|schema cache/i.test(e.message||'')))?'Falta atualizar o banco. Rode de novo o arquivo schema.sql no Supabase.':'Não foi possível verificar agora. Tente de novo.');
+    return;
+  }
+  const b=$('#tg-body');if(!b)return;
+  if(row&&row.chat_id){
+    tgMsg('Conectado ao Telegram.');
+    b.innerHTML='<p>Escreva para @'+esc(TGBOT)+' coisas como <strong>gastei 45 no mercado</strong> ou <strong>recebi 3000 salário</strong>. Comandos: /saldo, /semana, /mes, /desfazer e /ajuda. Você também recebe um lembrete diário das contas que vencem.</p><div class="actions"><button class="btn btn-d" data-act="tg-off">Desconectar</button></div>';
+  }else{
+    tgMsg('Ainda não conectado.');
+    b.innerHTML='<p>Gere um código e abra o bot: ele conecta a sua conta sem pedir senha. O código vale 15 minutos e funciona uma vez.</p><div class="actions"><button class="btn btn-p" data-act="tg-code">Gerar código</button></div>';
+  }
+}
+function telegramSheet(){
+  if(!TGOK){openSheet('Telegram','<p>O bot do Telegram ainda não foi configurado neste site. O LEIA-ME explica como ativar.</p>');return}
+  openSheet('Telegram','<p class="lbl" id="tg-st" role="status">Verificando…</p><div id="tg-body"></div>');
+  tgRefresh();
+}
+async function tgCode(){
+  const al='ABCDEFGHJKMNPQRSTUVWXYZ23456789',a=new Uint8Array(8);crypto.getRandomValues(a);
+  const code=[...a].map(x=>al[x%al.length]).join('');
+  try{
+    const tok=await ensureToken();
+    await api('/rest/v1/telegram_links?on_conflict=user_id',{method:'POST',token:tok,headers:{Prefer:'resolution=merge-duplicates,return=minimal'},body:{user_id:session.user.id,code,code_expires_at:new Date(Date.now()+15*60000).toISOString()}});
+  }catch(e){tgMsg((e&&e.status===404)?'Falta atualizar o banco. Rode de novo o arquivo schema.sql no Supabase.':'Não foi possível gerar o código agora.');return}
+  const b=$('#tg-body');if(!b)return;
+  tgMsg('Código gerado. Vale por 15 minutos.');
+  b.innerHTML='<p>Toque no botão para abrir o bot e conectar. Se preferir, abra @'+esc(TGBOT)+' e envie: <strong>/start '+code+'</strong></p><div class="actions"><a class="btn btn-p" href="https://t.me/'+esc(TGBOT)+'?start='+code+'" target="_blank" rel="noopener noreferrer">Abrir o Telegram</a><button class="btn btn-s" data-act="tg-check">Já enviei, verificar</button></div>';
+}
+async function tgOff(){
+  try{const tok=await ensureToken();await api('/rest/v1/telegram_links?user_id=eq.'+encodeURIComponent(session.user.id),{method:'DELETE',token:tok,headers:{Prefer:'return=minimal'}})}
+  catch(e){tgMsg('Não foi possível desconectar agora.');return}
+  toast('Telegram desconectado.');tgRefresh();
+}
+
 /* ---------- excluir conta ---------- */
 function delAccSheet(){
   openSheet('Excluir minha conta','<p>Isso apaga a sua conta de acesso e todos os dados dela, na nuvem e neste aparelho. Não dá para desfazer.</p><form id="delf" novalidate style="margin-top:12px"><div class="field"><label for="d-word">Digite EXCLUIR para confirmar</label><input class="input" id="d-word" autocomplete="off" autocapitalize="characters" aria-describedby="e-d-word" data-autofocus><div class="err" id="e-d-word" hidden></div></div><div class="actions"><button class="btn btn-d" id="d-go" type="submit">Excluir minha conta</button></div></form>');
@@ -1233,6 +1316,10 @@ document.addEventListener('click',async e=>{
     case 'budget-edit':if(EXP.includes(el.dataset.c))budgetSheet(el.dataset.c);break;
     case 'budget-del':{const c=el.dataset.c;if(S.budgets&&c in S.budgets){const v=S.budgets[c];const b=Object.assign({},S.budgets);delete b[c];S.budgets=b;save();closeSheet();render();toast('Orçamento removido.',{label:'Desfazer',fn:()=>{S.budgets=Object.assign({},S.budgets,{[c]:v});save();render()}})}break}
     case 'cats':catsSheet();break;
+    case 'telegram':telegramSheet();break;
+    case 'tg-code':tgCode();break;
+    case 'tg-check':tgRefresh();break;
+    case 'tg-off':tgOff();break;
     case 'cat-edit':catEditSheet(id);break;
     case 'cat-del':catDelete(id);break;
     case 'tx-fill':{const t=S.tx.find(x=>x.id===id);if(t)fillTx(t);break}

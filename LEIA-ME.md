@@ -29,6 +29,32 @@ O app é um site estático (sem compilação) com login de e-mail e senha e dado
 - **Repetir todo mês**: marque ao criar um lançamento. O app cria os próximos como agendados; para parar, use "Encerrar" na aba Relatórios.
 - **Backup completo (JSON)** e **Restaurar backup**: no Perfil. O arquivo contém todos os seus dados, então guarde-o em local seguro. Restaurar substitui os dados atuais da conta.
 
+## Bot do Telegram (opcional)
+
+Com o bot, você lança e consulta conversando: "gastei 45 no mercado", "recebi 3000 salário", "conta de luz 150 vence 10/11", `/saldo`, `/semana`, `/mes`, `/desfazer`. Todo dia às 8h (horário de Brasília) ele avisa o que vence hoje, amanhã ou já está atrasado. Ele entende só texto, não áudio.
+
+1. **Criar o bot.** No Telegram, abra o **@BotFather**, envie `/newbot`, escolha um nome e um usuário que termine em `bot`. Ele devolve um **token**: é uma senha, não mostre a ninguém.
+2. **Atualizar o banco.** No Supabase, cole de novo o `supabase/schema.sql` atualizado no SQL Editor e rode (pode repetir sem problema).
+3. **Chave de serviço.** Em **Project Settings > API Keys**, copie a chave secreta (**service_role** ou **secret**, começa com `sb_secret_`). Ela dá acesso total ao banco: guarde só na Vercel, nunca no GitHub, no `config.js` ou numa conversa.
+4. **Variáveis na Vercel.** No projeto, vá em **Settings > Environment Variables** e crie estas cinco (marque Production):
+
+   | Nome | Valor |
+   |---|---|
+   | `SUPABASE_URL` | O Project URL, como `https://xxxx.supabase.co` |
+   | `SUPABASE_SERVICE_ROLE_KEY` | A chave secreta do passo 3 |
+   | `TELEGRAM_BOT_TOKEN` | O token do BotFather |
+   | `TELEGRAM_WEBHOOK_SECRET` | Uma sequência longa inventada por você (letras, números, `_` ou `-`) |
+   | `CRON_SECRET` | Outra sequência longa inventada |
+
+   Depois, em **Deployments**, abra o menu do último deploy e escolha **Redeploy**.
+5. **Usuário do bot no app.** No `config.js`, preencha `telegramBot` com o usuário do bot, sem o @, e faça o commit.
+6. **Ligar o bot ao site.** Abra no navegador este endereço, trocando `SEU_TOKEN` e `SEU_SEGREDO` pelos valores do passo 1 e do `TELEGRAM_WEBHOOK_SECRET`:
+   `https://api.telegram.org/botSEU_TOKEN/setWebhook?url=https://controlefinanceiro-red-two.vercel.app/api/telegram&secret_token=SEU_SEGREDO`
+   A resposta deve conter `"ok":true`.
+7. **Conectar a sua conta.** No app, abra **Perfil > Telegram**, toque em **Gerar código** e depois em **Abrir o Telegram**. O código vale 15 minutos e funciona uma vez.
+
+Cuidados: as mensagens passam pelos servidores do Telegram, que não protege conversas com bots de ponta a ponta. Se o token ou a chave secreta vazarem, gere outros (no BotFather, `/revoke`; no Supabase, crie uma nova chave) e atualize a Vercel. Se o app estiver aberto quando o bot gravar algo, o lançamento novo aparece no app na próxima sincronização.
+
 ## Parte 1: criar o projeto no Supabase (uns 10 minutos)
 
 Os nomes dos menus podem variar um pouco, porque o Supabase atualiza o painel de tempos em tempos.
