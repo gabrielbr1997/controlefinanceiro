@@ -51,7 +51,7 @@ const numIn=v=>r2(v).toFixed(2).replace('.',',');
 
 /* ---------- dados ---------- */
 const cmp=(a,b)=>b.date.localeCompare(a.date)||b.ts-a.ts;
-function emptyState(){return{v:2,name:'',hide:false,limit:null,opening:0,onboarded:false,month:mkey(new Date()),simFail:false,chat:[],tx:[],goals:[],rec:[],cats:[]}}
+function emptyState(){return{v:2,name:'',hide:false,limit:null,opening:0,onboarded:false,month:mkey(new Date()),simFail:false,chat:[],tx:[],goals:[],rec:[],cats:[],budgets:{}}}
 let S=emptyState();syncCats();
 
 /* ---------- conta (Supabase) e sincronização ---------- */
@@ -459,6 +459,27 @@ function goalCalc(g){
   const months=(y2-y1)*12+(m2-m1),left=r2(g.target-g.saved);
   return{months,left,pct:Math.min(100,Math.round(g.saved/g.target*100)),done:g.saved>=g.target};
 }
+function budgetsHtml(k){
+  const bs=S.budgets||{},names=EXP.filter(c=>c in bs);
+  const rows=names.map(c=>{
+    const v=bs[c],u=sum(inMonth(k).filter(t=>t.type==='expense'&&t.cat===c)),p=Math.min(100,u/v*100),over=u>v;
+    return '<li class="goal"><div class="goal-h"><span class="gn">'+esc(c)+'</span><button class="btn-t" data-act="budget-edit" data-c="'+esc(c)+'" aria-label="Editar orçamento de '+esc(c)+'">Editar</button></div><div class="bar'+(over?' over':'')+'" aria-hidden="true"><i style="width:'+p+'%"></i></div><div class="goal-m num"><span>'+money(u)+' de '+money(v)+'</span><span class="'+(over?'warn':'')+'">'+(over?'Acima em '+money(u-v):'Restam '+money(v-u))+'</span></div></li>';
+  }).join('');
+  return '<section class="sec" aria-labelledby="bg-h"><div class="sec-h"><h2 id="bg-h">Orçamento por categoria</h2><button class="btn-t" data-act="budget-new">'+(names.length?'Novo':'Definir')+'</button></div>'+(names.length?'<ul class="list">'+rows+'</ul>':'<p class="lbl">Defina quanto quer gastar por categoria em cada mês, como Alimentação ou Lazer.</p>')+'</section>';
+}
+function budgetSheet(c){
+  ui.editId=c||null;const bs=S.budgets||{};
+  openSheet(c?'Orçamento de '+c:'Novo orçamento','<form id="budgf" novalidate><div class="field"><label for="bg-cat">Categoria</label><select id="bg-cat"'+(c?' disabled':'')+'>'+EXP.map(x=>'<option'+(x===c?' selected':'')+'>'+esc(x)+'</option>').join('')+'</select></div>'
+  +'<div class="field"><label for="bg-val">Quanto gastar por mês (R$)</label><input class="input" id="bg-val" inputmode="decimal" autocomplete="off" placeholder="0,00" value="'+(c&&bs[c]!=null?numIn(bs[c]):'')+'" aria-describedby="e-bg-val" data-autofocus><div class="err" id="e-bg-val" hidden></div></div>'
+  +'<div class="actions"><button class="btn btn-p" type="submit">Salvar</button>'+(c?'<button class="btn btn-d" type="button" data-act="budget-del" data-c="'+esc(c)+'">Remover</button>':'')+'</div></form>');
+}
+function budgetSubmit(){
+  const c=ui.editId||$('#bg-cat').value,raw=$('#bg-val').value,v=parseMoney(raw);setErr('bg-val',null);
+  if(!EXP.includes(c))return;
+  if(!raw.trim()||!(v>0)){setErr('bg-val','Informe um valor maior que zero.');$('#bg-val').focus();return}
+  if(v>9999999.99){setErr('bg-val','O valor máximo é R$ 9.999.999,99.');$('#bg-val').focus();return}
+  S.budgets=Object.assign({},S.budgets,{[c]:v});save();closeSheet();render();toast('Orçamento salvo.');
+}
 function vPlan(){
   const k=S.month,used=monthTotals(k).out,L=S.limit;
   let lim='';
@@ -476,6 +497,7 @@ function vPlan(){
   +monthNav()
   +'<section class="sec" style="margin-top:12px" aria-labelledby="lim-h"><h2 id="lim-h" style="margin-bottom:12px">Limite mensal de gastos</h2><div class="panel">'+lim
   +'<form id="limf" style="margin-top:16px" novalidate><div class="field"><label for="l-val">Limite mensal (R$)</label><input class="input" id="l-val" inputmode="decimal" autocomplete="off" placeholder="Ex.: 3.500,00" value="'+(L!=null?numIn(L):'')+'" aria-describedby="e-l-val"><div class="err" id="e-l-val" hidden></div><div class="lbl">Vale para todos os meses.</div></div><div class="actions"><button class="btn btn-p" type="submit">Salvar limite</button>'+(L!=null?'<button class="btn btn-d" type="button" data-act="limit-clear">Remover limite</button>':'')+'</div></form></div></section>'
+  +budgetsHtml(k)
   +'<section class="sec" aria-labelledby="goal-h"><div class="sec-h"><h2 id="goal-h">Metas de economia</h2>'+(S.goals.length?'<button class="btn-t" data-act="goal-new">Nova meta</button>':'')+'</div><ul class="list">'+goals+'</ul></section>';
 }
 
@@ -611,6 +633,10 @@ function paintRep(){
     if(inc>0)ins.push(net>=0?'Você guardou '+Math.round(net/inc*100)+'% do que recebeu neste período.':'Você gastou mais do que recebeu: o resultado foi de − '+money(Math.abs(net))+'.');
     const ex=groupCats(all.filter(x=>x.type==='expense'));
     if(ex.length&&r.cat==='all'){const tt=sum(all.filter(x=>x.type==='expense'));if(tt>0)ins.push(esc(ex[0][0])+' é a maior categoria de gasto, com '+Math.round(ex[0][1]/tt*100)+'% do total.')}
+    if(r.period==='month'&&r.cat==='all'&&S.budgets){
+      const mk0=mkey(new Date());
+      EXP.filter(c=>c in S.budgets).forEach(c=>{const u=sum(inMonth(mk0).filter(x=>x.type==='expense'&&x.cat===c));if(u>S.budgets[c])ins.push(esc(c)+' passou do orçamento: '+money(u)+' de '+money(S.budgets[c])+'.')});
+    }
     if(R.to>t&&R.from<=t&&out>0&&elapsed>0)ins.push('Mantendo a média diária, os gastos fechariam o período em '+money(out/elapsed*total)+'. É uma estimativa simples.');
     if(ins.length)h+='<section class="sec" aria-labelledby="ds-h"><h2 id="ds-h">Destaques</h2><ul class="tips">'+ins.map(x=>'<li>'+x+'</li>').join('')+'</ul></section>';
 
@@ -677,6 +703,7 @@ function cleanData(d){
     const o={id:id(x.id),ts:num(x.ts)?x.ts:Date.now(),type:x.type,desc:str(x.desc,60)||cat,amt:r2(x.amt),cat,date:x.date};
     if(x.pending===true)o.pending=true;
     if(typeof x.recId==='string'&&recIds.has(x.recId))o.recId=x.recId;
+    if(x.inst&&typeof x.inst==='object'&&Number.isInteger(x.inst.i)&&Number.isInteger(x.inst.n)&&x.inst.n>=1&&x.inst.n<=60&&x.inst.i>=1&&x.inst.i<=x.inst.n)o.inst={g:str(x.inst.g||'g',40),i:x.inst.i,n:x.inst.n};
     tx.push(o);
   });
   (Array.isArray(d.goals)?d.goals:[]).slice(0,200).forEach(g=>{
@@ -684,7 +711,9 @@ function cleanData(d){
     const sv=num(g.saved)?Math.min(Math.max(g.saved,0),g.target):0;
     goals.push({id:id(g.id),name:str(g.name,40)||'Meta',target:r2(g.target),saved:r2(sv),deadline:g.deadline});
   });
-  return{v:2,name:str(d.name,30),hide:d.hide===true,limit:num(d.limit)&&d.limit>0&&d.limit<=9999999.99?r2(d.limit):null,opening:num(d.opening)&&Math.abs(d.opening)<=9999999.99?r2(d.opening):0,onboarded:true,tx,goals,rec,cats};
+  const budgets={};
+  if(d.budgets&&typeof d.budgets==='object')Object.keys(d.budgets).slice(0,100).forEach(c=>{const v=d.budgets[c];if(exl.includes(c)&&num(v)&&v>0&&v<=9999999.99)budgets[c]=r2(v)});
+  return{v:2,name:str(d.name,30),hide:d.hide===true,limit:num(d.limit)&&d.limit>0&&d.limit<=9999999.99?r2(d.limit):null,opening:num(d.opening)&&Math.abs(d.opening)<=9999999.99?r2(d.opening):0,onboarded:true,tx,goals,rec,cats,budgets};
 }
 async function restoreFile(f){
   if(f.size>3e6){toast('Arquivo grande demais para ser um backup do app.');return}
@@ -812,8 +841,10 @@ function txSheet(id){
   +'<div class="field"><label for="f-cat">Categoria</label><select id="f-cat" aria-describedby="e-f-cat">'+catOpts(type,t?t.cat:null)+'</select><div class="err" id="e-f-cat" hidden></div></div>'
   +'<div class="field"><label for="f-date">Data (vencimento, se agendada)</label><input class="input" id="f-date" type="date" value="'+(t?t.date:today())+'" aria-describedby="e-f-date"><div class="err" id="e-f-date" hidden></div></div>'
   +'<div class="field"><span class="fl" id="sl">Situação</span><div class="seg" role="radiogroup" aria-labelledby="sl"><label class="seg-i"><input type="radio" name="status" value="done"'+(pend?'':' checked')+'><span>Realizada</span></label><label class="seg-i"><input type="radio" name="status" value="pending"'+(pend?' checked':'')+'><span>Agendada</span></label></div><div class="lbl">Agendada é uma conta a pagar ou a receber: só entra no saldo quando você marcar como paga.</div></div>'
+  +(t?'':'<div class="field"><label for="f-inst">Parcelas</label><input class="input" id="f-inst" inputmode="numeric" maxlength="2" autocomplete="off" value="1" aria-describedby="e-f-inst"><div class="err" id="e-f-inst" hidden></div><div class="lbl">Com mais de 1 parcela, o valor é o de cada parcela. As seguintes ficam agendadas, uma por mês.</div></div>')
+  +(t&&t.inst?'<p class="lbl" style="margin-bottom:16px">Parcela '+t.inst.i+' de '+t.inst.n+'.</p>':'')
   +(t?(t.recId?'<p class="lbl" style="margin-bottom:16px">Faz parte de um lançamento recorrente.</p>':''):'<label class="chk"><input type="checkbox" id="f-rec"><span>Repetir todo mês neste dia</span></label>')
-  +'<div class="actions"><button class="btn btn-p" type="submit">'+(t?'Salvar alterações':'Adicionar')+'</button>'+(t?'<button class="btn btn-s" type="button" data-act="tx-dup" data-id="'+t.id+'">Duplicar</button><button class="btn btn-d" type="button" data-act="tx-del" data-id="'+t.id+'">Excluir</button>':'')+'</div></form>';
+  +'<div class="actions"><button class="btn btn-p" type="submit">'+(t?'Salvar alterações':'Adicionar')+'</button>'+(t?'<button class="btn btn-s" type="button" data-act="tx-dup" data-id="'+t.id+'">Duplicar</button>'+(t.inst&&t.inst.i<t.inst.n?'<button class="btn btn-d" type="button" data-act="tx-del-rest" data-id="'+t.id+'">Excluir esta e as seguintes</button>':'')+'<button class="btn btn-d" type="button" data-act="tx-del" data-id="'+t.id+'">Excluir</button>':'')+'</div></form>';
   openSheet(t?'Editar transação':'Nova transação',html);
 }
 function recents(){
@@ -837,11 +868,22 @@ function txSubmit(){
   else if(amt>9999999.99)bad('f-amt','O valor máximo é R$ 9.999.999,99.');
   if(!(type==='income'?INC:EXP).includes(cat))bad('f-cat','Escolha uma categoria.');
   if(!validDate(date))bad('f-date','Informe uma data válida.');
+  const instEl=$('#f-inst'),ninst=instEl?parseInt(instEl.value,10):1;
+  if(instEl){setErr('f-inst',null);if(!(ninst>=1&&ninst<=60)||!/^\d{1,2}$/.test(instEl.value.trim()))bad('f-inst','Use de 1 a 60 parcelas.')}
   if(firstBad){$('#'+firstBad).focus();return}
   const edit=!!ui.editId,pending=$('#txf input[name=status]:checked').value==='pending',rec=!edit&&!!$('#f-rec')&&$('#f-rec').checked;
+  if(!edit&&ninst>1&&rec){setErr('f-inst','Escolha parcelas ou repetição mensal, não os dois.');$('#f-inst').focus();return}
   if(edit){const t=S.tx.find(x=>x.id===ui.editId);if(t){
     if(t.recId&&t.date.slice(0,7)!==date.slice(0,7))noteSkip(t);
     Object.assign(t,{type,desc,amt,cat,date});if(pending)t.pending=true;else delete t.pending}}
+  else if(ninst>1){
+    const g=uid(),base=date.slice(0,7),dd=+date.slice(8);
+    for(let i=0;i<ninst;i++){
+      const k=addM(base,i),d=k+'-'+pad(Math.min(dd,+lastDay(k).slice(8))),suf=' ('+(i+1)+'/'+ninst+')';
+      const o={id:uid(),ts:Date.now()+i,type,desc:desc.slice(0,60-suf.length)+suf,amt,cat,date:d,inst:{g,i:i+1,n:ninst}};
+      if(i>0||pending)o.pending=true;S.tx.push(o);
+    }
+  }
   else{
     const nt={id:uid(),ts:Date.now(),type,desc,amt,cat,date};if(pending)nt.pending=true;
     if(rec){const r={id:uid(),type,desc,amt,cat,day:+date.slice(8),from:date.slice(0,7),skip:[]};S.rec=(S.rec||[]).concat([r]);nt.recId=r.id}
@@ -850,7 +892,13 @@ function txSubmit(){
   const mk=date.slice(0,7);let extra='';
   if(mk!==S.month){S.month=mk;extra=' em '+mLabel(mk)}
   save();closeSheet();render();
-  toast((type==='income'?'Receita ':'Despesa ')+(edit?'atualizada':pending?'agendada':'adicionada')+extra+(rec?'. Ela se repete todo mês':'')+'.');
+  toast((type==='income'?'Receita ':'Despesa ')+(edit?'atualizada':ninst>1?'parcelada em '+ninst+'x':pending?'agendada':'adicionada')+extra+(rec?'. Ela se repete todo mês':'')+'.');
+}
+function deleteRest(id){
+  const t=S.tx.find(x=>x.id===id);if(!t||!t.inst)return;
+  const gone=S.tx.filter(x=>x.inst&&x.inst.g===t.inst.g&&x.inst.i>=t.inst.i);
+  S.tx=S.tx.filter(x=>!gone.includes(x));save();closeSheet();render();
+  toast(gone.length+(gone.length===1?' parcela excluída.':' parcelas excluídas.'),{label:'Desfazer',fn:()=>{S.tx.push(...gone);save();render();toast('Exclusão desfeita.')}});
 }
 function deleteTx(id){
   const i=S.tx.findIndex(x=>x.id===id);if(i<0)return;
@@ -1027,6 +1075,7 @@ document.addEventListener('click',async e=>{
     case 'add':txSheet(null);break;
     case 'edit':txSheet(id);break;
     case 'tx-del':deleteTx(id);break;
+    case 'tx-del-rest':deleteRest(id);break;
     case 'sheet-close':closeSheet();break;
     case 'confirm-ok':{const f=sheet&&sheet.fn;closeSheet();if(f)f();break}
     case 'chip-analyze':go('chat');ask('Analisar meus gastos do mês');break;
@@ -1040,6 +1089,9 @@ document.addEventListener('click',async e=>{
     case 'goal-del':{const i=S.goals.findIndex(x=>x.id===id);if(i<0)break;const g=S.goals.splice(i,1)[0];save();closeSheet();render();toast('Meta excluída.',{label:'Desfazer',fn:()=>{S.goals.splice(Math.min(i,S.goals.length),0,g);save();render();toast('Exclusão desfeita.')}});break}
     case 'limit-clear':S.limit=null;save();render();toast('Limite removido.');break;
     case 'export':exportCsv();break;
+    case 'budget-new':budgetSheet(null);break;
+    case 'budget-edit':if(EXP.includes(el.dataset.c))budgetSheet(el.dataset.c);break;
+    case 'budget-del':{const c=el.dataset.c;if(S.budgets&&c in S.budgets){const v=S.budgets[c];const b=Object.assign({},S.budgets);delete b[c];S.budgets=b;save();closeSheet();render();toast('Orçamento removido.',{label:'Desfazer',fn:()=>{S.budgets=Object.assign({},S.budgets,{[c]:v});save();render()}})}break}
     case 'cats':catsSheet();break;
     case 'cat-edit':catEditSheet(id);break;
     case 'cat-del':catDelete(id);break;
@@ -1073,6 +1125,7 @@ document.addEventListener('submit',e=>{
     case 'chat-form':{const i=$('#chat-q'),q=i.value;if(!q.trim())return;i.value='';ask(q);break}
     case 'txf':txSubmit();break;
     case 'catf':catSubmit();break;
+    case 'budgf':budgetSubmit();break;
     case 'catef':catEditSubmit();break;
     case 'goalf':goalSubmit();break;
     case 'contf':contSubmit();break;
